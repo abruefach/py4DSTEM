@@ -658,78 +658,72 @@ def threshold_Braggpeaks(pointlistarray, minRelativeIntensity, relativeToPeak, m
     return pointlistarray
 
 
-def universal_threshold(pointlistarray, thresh, metric='maximum', minPeakSpacing=False,
-                                                            maxNumPeaks=False,name=None):
+def universal_threshold(pointlistarray, coords, minIntensity, metric, minPeakSpacing=None,
+                                                    maxNumPeaks=None, mask = None):
     """
     Takes a PointListArray of detected Bragg peaks and applies universal thresholding,
     returning the thresholded PointListArray. To skip a threshold, set that parameter to False.
-
     Accepts:
         pointlistarray        (PointListArray) The Bragg peaks. Must have
                               coords=('qx','qy','intensity')
-        thresh                (float) the minimum allowed peak intensity
-                              The meaning of this threshold value is determined by the value
-                              of the 'metric' argument, below
-        metric                (string) the metric used to compare intensities. Must be in
-
-                                    ('maximum','average','median','manual')
-
-                              In each case aside from 'manual', the intensity threshold is
-                              set to Val*thresh, where Val is given by
-
-                                'maximum' - the maximum intensity in the entire pointlistarray
-                                'average' - the average of the maximum intensities of each
-                                            scan position in the pointlistarray
-                                'median' - the medain of the maximum intensities of each
-                                           scan position in the entire pointlistarray
-
-                              If metric is 'manual', the threshold is exactly minIntensity
+        minIntensity          (float) the minimum allowed peak intensity, relative to the
+                              selected metric (0-1), except in the case of 'manual' metric,
+                              in which the threshold value based on the minimum intensity
+                              that you want thresholder out should be set.
+        metric                (string) the metric used to compare intensities. 'average'
+                              compares peak intensity relative to the average of the maximum
+                              intensity in each diffraction pattern. 'max' compares peak
+                              intensity relative to the maximum intensity value out of all
+                              the diffraction patterns.  'median' compares peak intensity relative
+                              to the median of the maximum intensity peaks in each diffraction
+                              pattern. 'manual' Allows the user to threshold based on a
+                              predetermined intensity value manually determined.
         minPeakSpacing        (int) the minimum allowed spacing between adjacent peaks -
                               optional, default is false
         maxNumPeaks           (int) maximum number of allowed peaks per diffraction pattern -
                               optional, default is false
-        name                  (str, optional) a name for the returned PointListArray.
-                              If unspecified, takes the old PLA name and appends
-                              '_unithresh'.
-
+        mask                  (nd.array) 2D mask object- usually beam stop mask
     Returns:
        pointlistarray        (PointListArray) Bragg peaks thresholded by intensity.
     """
-    assert isinstance(pointlistarray,PointListArray)
-    assert metric in ('maximum','average','median','manual')
-    assert isinstance(thresh,Number)
     assert all([item in pointlistarray.dtype.fields for item in ['qx','qy','intensity']]), (
                 "pointlistarray must include the coordinates 'qx', 'qy', and 'intensity'.")
-    _pointlistarray = pointlistarray.copy()
-    if name is None:
-        _pointlistarray.name = pointlistarray.name+"_unithresh"
-
-    HI_array = np.zeros( (_pointlistarray.shape[0], _pointlistarray.shape[1]) )
-    for (Rx, Ry) in tqdmnd(_pointlistarray.shape[0],_pointlistarray.shape[1]):
-            pointlist = _pointlistarray.get_pointlist(Rx,Ry)
+    qx, qy = coords.get_origin()
+    
+    HI_array = np.zeros( (pointlistarray.shape[0], pointlistarray.shape[1]) )
+    for (Rx, Ry) in tqdmnd(pointlistarray.shape[0],pointlistarray.shape[1]):
+            pointlist = pointlistarray.get_pointlist(Rx,Ry)
+            pointlist.sort(coordinate='intensity', order='descending')
             if pointlist.data.shape[0] == 0:
                 top_value = np.nan
             else:
-                HI_array[Rx, Ry] = np.max(pointlist.data['intensity'])
+                top_value = pointlist.data[0][2]
+                HI_array[Rx, Ry] = top_value
 
-    if metric=='maximum':
-        _thresh = np.max(HI_array)*thresh
-    elif metric=='average':
-        _thresh = np.nanmean(HI_array)*thresh
-    elif metric=='median':
-        _thresh = np.median(HI_array)*thresh
-    else:
-        _thresh = thresh
+    mean_intensity = np.nanmean(HI_array)
+    max_intensity = np.max(HI_array)
+    median_intensity = np.median(HI_array)
 
-    for (Rx, Ry) in tqdmnd(_pointlistarray.shape[0],_pointlistarray.shape[1]):
-            pointlist = _pointlistarray.get_pointlist(Rx,Ry)
+    for (Rx, Ry) in tqdmnd(pointlistarray.shape[0],pointlistarray.shape[1]):
+            pointlist = pointlistarray.get_pointlist(Rx,Ry)
 
             # Remove peaks below minRelativeIntensity threshold
-            deletemask = pointlist.data['intensity'] < _thresh
-            pointlist.remove_points(deletemask)
+            if minIntensity is not False:
+                if metric == 'average':
+                    deletemask = pointlist.data['intensity']/mean_intensity < minIntensity
+                    pointlist.remove_points(deletemask)
+                if metric == 'maximum':
+                    deletemask = pointlist.data['intensity'] / max_intensity < minIntensity
+                    pointlist.remove_points(deletemask)
+                if metric == 'median':
+                    deletemask = pointlist.data['intensity'] / median_intensity < minIntensity
+                    pointlist.remove_points(deletemask)
+                if metric == 'manual':
+                    deletemask = pointlist.data['intensity'] < minIntensity
+                    pointlist.remove_points(deletemask)
 
             # Remove peaks that are too close together
-            if maxNumPeaks is not False:
+            if maxNumPeaks is not None:
                 r2 = minPeakSpacing**2
                 deletemask = np.zeros(pointlist.length, dtype=bool)
                 for i in range(pointlist.length):
@@ -741,12 +735,19 @@ def universal_threshold(pointlistarray, thresh, metric='maximum', minPeakSpacing
                 pointlist.remove_points(deletemask)
 
             # Keep only up to maxNumPeaks
-            if maxNumPeaks is not False:
+            if maxNumPeaks is not None:
                 if maxNumPeaks < pointlist.length:
                     deletemask = np.zeros(pointlist.length, dtype=bool)
                     deletemask[maxNumPeaks:] = True
                     pointlist.remove_points(deletemask)
-    return _pointlistarray
+            
+            if mask is not None:
+                deletemask = np.zeros(pointlist.length, dtype=bool)
+                for i in range(pointlist.length):
+                    deletemask = np.where((mask[ (pointlist.data['qx'] - qx[Rx, Ry]).astype(int),
+                        (pointlist.data['qy'] - qy[Rx,Ry]).astype(int) ] == False), True, False) 
+                    pointlist.remove_points(deletemask)
+    return pointlistarray
 
 
 def get_pointlistarray_intensities(pointlistarray):
