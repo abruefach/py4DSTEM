@@ -744,9 +744,12 @@ def universal_threshold(pointlistarray, coords, minIntensity, metric, minPeakSpa
             if mask is not None:
                 deletemask = np.zeros(pointlist.length, dtype=bool)
                 for i in range(pointlist.length):
-                    deletemask = np.where((mask[ (pointlist.data['qx'] - qx[Rx, Ry]).astype(int),
-                        (pointlist.data['qy'] - qy[Rx,Ry]).astype(int) ] == False), True, False) 
-                    pointlist.remove_points(deletemask)
+                    deletemask_ceil = np.where((mask[ np.ceil(pointlist.data['qx'] - qx[Rx, Ry]).astype(int),
+                        np.ceil(pointlist.data['qy'] - qy[Rx,Ry]).astype(int) ] == False), True, False) 
+                    pointlist.remove_points(deletemask_ceil)
+                    deletemask_floor = np.where((mask[ np.floor(pointlist.data['qx'] - qx[Rx, Ry]).astype(int),
+                        np.floor(pointlist.data['qy'] - qy[Rx,Ry]).astype(int) ] == False), True, False)
+                    pointlist.remove_points(deletemask_floor)
     return pointlistarray
 
 
