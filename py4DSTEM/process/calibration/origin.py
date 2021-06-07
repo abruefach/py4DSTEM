@@ -4,8 +4,7 @@ import numpy as np
 from scipy.ndimage.filters import gaussian_filter
 from scipy.optimize import leastsq
 
-from ..fit import plane,parabola,fit_2D
-from ..diskdetection import get_bragg_vector_map
+from ..fit import plane,parabola,bezier_two,fit_2D
 from ..utils import get_CoM, add_to_2D_array_from_floats,tqdmnd
 from ...io.datastructure import PointListArray
 
@@ -171,7 +170,8 @@ def get_origin_beamstop(dp,**kwargs):
 
 ### Functions for fitting the origin
 
-def fit_origin(qx0_meas,qy0_meas,mask=None,fitfunction='plane',returnfitp=False):
+def fit_origin(qx0_meas, qy0_meas, mask=None, fitfunction='plane', returnfitp=False, 
+	           robust=False, robust_steps=3, robust_thresh=2):
     """
     Fits the position of the origin of diffraction space to a plane or parabola,
     given some 2D arrays (qx0_meas,qy0_meas) of measured center positions, optionally
@@ -180,8 +180,15 @@ def fit_origin(qx0_meas,qy0_meas,mask=None,fitfunction='plane',returnfitp=False)
     Accepts:
         qx0_meas,qy0_meas       (2d arrays)
         mask                    (2b boolean array) ignore points where mask=True
-        fitfunction             (str) must be 'plane' or 'parabola'
+        fitfunction             (str) must be 'plane' or 'parabola' or 'bezier_two'
         returnfitp              (bool) if True, returns the fit parameters
+        robust                  (bool) Optional parameter. If set to True, fit will be
+                                repeated with outliers removed.
+        robust_steps            (int) Optional parameter. Number of robust iterations 
+                                performed after initial fit.
+        robust_thresh-          (int) Optional parameter. Threshold for including points, 
+                                in units of root-mean-square (standard deviations) error 
+                                of the predicted values after fitting. 
 
     Returns:
         (qx0_fit,qy0_fit,qx0_residuals,qy0_residuals)
@@ -192,21 +199,30 @@ def fit_origin(qx0_meas,qy0_meas,mask=None,fitfunction='plane',returnfitp=False)
     assert isinstance(qx0_meas,np.ndarray) and len(qy0_meas.shape)==2
     assert qx0_meas.shape == qy0_meas.shape
     assert mask is None or mask.shape==qx0_meas.shape and mask.dtype==bool
-    assert fitfunction in ('plane','parabola')
+    assert fitfunction in ('plane','parabola','bezier_two')
     if fitfunction=='plane':
         f = plane
     elif fitfunction=='parabola':
         f = parabola
+    elif fitfunction=='bezier_two':
+        f = bezier_two
     else:
         raise Exception("Invalid fitfunction '{}'".format(fitfunction))
 
     # Fit data
     if mask is None:
-        popt_x, pcov_x, qx0_fit = fit_2D(f, qx0_meas)
-        popt_y, pcov_y, qy0_fit = fit_2D(f, qy0_meas)
+        popt_x, pcov_x, qx0_fit = fit_2D(f, qx0_meas,
+            robust=robust, robust_steps=robust_steps, robust_thresh=robust_thresh)
+        popt_y, pcov_y, qy0_fit = fit_2D(f, qy0_meas,  
+        	robust=robust, robust_steps=robust_steps, robust_thresh=robust_thresh)
+
     else:
-        popt_x, pcov_x, qx0_fit = fit_2D(f, qx0_meas, data_mask=mask==False)
-        popt_y, pcov_y, qy0_fit = fit_2D(f, qy0_meas, data_mask=mask==False)
+        popt_x, pcov_x, qx0_fit = fit_2D(f, qx0_meas, 
+        	robust=robust, robust_steps=robust_steps, robust_thresh=robust_thresh,
+        	data_mask=mask==False)
+        popt_y, pcov_y, qy0_fit = fit_2D(f, qy0_meas, 
+        	robust=robust, robust_steps=robust_steps, robust_thresh=robust_thresh,
+        	data_mask=mask==False)
 
     # Compute residuals
     qx0_residuals = qx0_meas-qx0_fit
@@ -226,75 +242,6 @@ def fit_origin(qx0_meas,qy0_meas,mask=None,fitfunction='plane',returnfitp=False)
 
 
 ### Older / soon-to-be-deprecated functions for finding the origin
-
-def get_diffraction_shifts(Braggpeaks, Q_Nx, Q_Ny, findcenter='CoM'):
-    """
-    Gets the diffraction shifts.
-
-    First, an guess at the unscattered beam position is determined, either by taking the CoM of the
-    Bragg vector map, or by taking its maximal pixel.  If the CoM is used, an additional
-    refinement step is used where we take the CoM of a Bragg vector map contructed from a first guess
-    at the central Bragg peaks (as opposed to the BVM of all BPs). Once a
-    unscattered beam position is determined, the Bragg peak closest to this position is identified.
-    The shifts in these peaks positions from their average are returned as the diffraction shifts.
-
-    Accepts:
-        Braggpeaks      (PointListArray) the Bragg peak positions
-        Q_Nx, Q_Ny      (ints) the shape of diffration space
-        findcenter      (str) specifies the method for determining the unscattered beam position
-                        options: 'CoM', or 'max'
-
-    Returns:
-        xshifts         ((R_Nx,R_Ny)-shaped array) the shifts in x
-        yshifts         ((R_Nx,R_Ny)-shaped array) the shifts in y
-        braggvectormap  ((R_Nx,R_Ny)-shaped array) the Bragg vector map of only the Bragg peaks
-                        identified with the unscattered beam. Useful for diagnostic purposes.
-    """
-    assert isinstance(Braggpeaks, PointListArray), "Braggpeaks must be a PointListArray"
-    assert all([isinstance(item, (int,np.integer)) for item in [Q_Nx,Q_Ny]])
-    assert isinstance(findcenter, str), "center must be a str"
-    assert findcenter in ['CoM','max'], "center must be either 'CoM' or 'max'"
-    R_Nx,R_Ny = Braggpeaks.shape
-
-    # Get guess at position of unscattered beam
-    braggvectormap_all = get_bragg_vector_map(Braggpeaks, Q_Nx, Q_Ny)
-    if findcenter=='max':
-        x0,y0 = np.unravel_index(np.argmax(gaussian_filter(braggvectormap_all,10)),(Q_Nx,Q_Ny))
-    else:
-        x0,y0 = get_CoM(braggvectormap_all)
-        braggvectormap = np.zeros_like(braggvectormap_all)
-        for Rx in range(R_Nx):
-            for Ry in range(R_Ny):
-                pointlist = Braggpeaks.get_pointlist(Rx,Ry)
-                if pointlist.length > 0:
-                    r2 = (pointlist.data['qx']-x0)**2 + (pointlist.data['qy']-y0)**2
-                    index = np.argmin(r2)
-                    braggvectormap = add_to_2D_array_from_floats(braggvectormap,
-                                                                pointlist.data['qx'][index],
-                                                                pointlist.data['qy'][index],
-                                                                pointlist.data['intensity'][index])
-        x0,y0 = get_CoM(braggvectormap)
-
-    # Get Bragg peak closest to unscattered beam at each scan position
-    braggvectormap = np.zeros_like(braggvectormap_all)
-    xshifts = np.zeros((R_Nx,R_Ny))
-    yshifts = np.zeros((R_Nx,R_Ny))
-    for Rx in range(R_Nx):
-        for Ry in range(R_Ny):
-            pointlist = Braggpeaks.get_pointlist(Rx,Ry)
-            if pointlist.length > 0:
-                r2 = (pointlist.data['qx']-x0)**2 + (pointlist.data['qy']-y0)**2
-                index = np.argmin(r2)
-                braggvectormap = add_to_2D_array_from_floats(braggvectormap,
-                                                            pointlist.data['qx'][index],
-                                                            pointlist.data['qy'][index],
-                                                            pointlist.data['intensity'][index])
-                xshifts[Rx,Ry] = pointlist.data['qx'][index]
-                yshifts[Rx,Ry] = pointlist.data['qy'][index]
-
-    xshifts -= np.average(xshifts)
-    yshifts -= np.average(yshifts)
-    return xshifts, yshifts, braggvectormap
 
 def find_outlier_shifts(xshifts, yshifts, n_sigma=10, edge_boundary=0):
     """
