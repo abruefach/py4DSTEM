@@ -631,7 +631,7 @@ def threshold_Braggpeaks(pointlistarray, minRelativeIntensity, relativeToPeak, m
     return pointlistarray
 
 
-def universal_threshold(pointlistarray, coords, minIntensity, metric, minPeakSpacing=None,
+def universal_threshold(pointlistarray,  minIntensity, metric = 'manual', coords = None, minPeakSpacing=None,
                                                     maxNumPeaks=None, mask = None):
     """
     Takes a PointListArray of detected Bragg peaks and applies universal thresholding,
@@ -661,21 +661,23 @@ def universal_threshold(pointlistarray, coords, minIntensity, metric, minPeakSpa
     """
     assert all([item in pointlistarray.dtype.fields for item in ['qx','qy','intensity']]), (
                 "pointlistarray must include the coordinates 'qx', 'qy', and 'intensity'.")
-    qx, qy = coords.get_origin()
+    if coords is not None:
+        qx, qy = coords.get_origin()
     
-    HI_array = np.zeros( (pointlistarray.shape[0], pointlistarray.shape[1]) )
-    for (Rx, Ry) in tqdmnd(pointlistarray.shape[0],pointlistarray.shape[1]):
-            pointlist = pointlistarray.get_pointlist(Rx,Ry)
-            pointlist.sort(coordinate='intensity', order='descending')
-            if pointlist.data.shape[0] == 0:
-                top_value = np.nan
-            else:
-                top_value = pointlist.data[0][2]
-                HI_array[Rx, Ry] = top_value
+    if metric != 'manual':
+        HI_array = np.zeros( (pointlistarray.shape[0], pointlistarray.shape[1]) )
+        for (Rx, Ry) in tqdmnd(pointlistarray.shape[0],pointlistarray.shape[1]):
+                pointlist = pointlistarray.get_pointlist(Rx,Ry)
+                pointlist.sort(coordinate='intensity', order='descending')
+                if pointlist.data.shape[0] == 0:
+                    top_value = np.nan
+                else:
+                    top_value = pointlist.data[0][2]
+                    HI_array[Rx, Ry] = top_value
 
-    mean_intensity = np.nanmean(HI_array)
-    max_intensity = np.max(HI_array)
-    median_intensity = np.median(HI_array)
+        mean_intensity = np.nanmean(HI_array)
+        max_intensity = np.max(HI_array)
+        median_intensity = np.median(HI_array)
 
     for (Rx, Ry) in tqdmnd(pointlistarray.shape[0],pointlistarray.shape[1]):
             pointlist = pointlistarray.get_pointlist(Rx,Ry)
@@ -715,14 +717,23 @@ def universal_threshold(pointlistarray, coords, minIntensity, metric, minPeakSpa
                     pointlist.remove_points(deletemask)
             
             if mask is not None:
-                deletemask = np.zeros(pointlist.length, dtype=bool)
-                for i in range(pointlist.length):
-                    deletemask_ceil = np.where((mask[ np.ceil(pointlist.data['qx'] - qx[Rx, Ry]).astype(int),
-                        np.ceil(pointlist.data['qy'] - qy[Rx,Ry]).astype(int) ] == False), True, False) 
-                    pointlist.remove_points(deletemask_ceil)
-                    deletemask_floor = np.where((mask[ np.floor(pointlist.data['qx'] - qx[Rx, Ry]).astype(int),
-                        np.floor(pointlist.data['qy'] - qy[Rx,Ry]).astype(int) ] == False), True, False)
-                    pointlist.remove_points(deletemask_floor)
+                if coords is not None:
+                    deletemask = np.zeros(pointlist.length, dtype=bool)
+                    for i in range(pointlist.length):
+                        deletemask_ceil = np.where((mask[ np.ceil(pointlist.data['qx'] + qx[Rx, Ry]).astype(int),
+                            np.ceil(pointlist.data['qy'] + qy[Rx,Ry]).astype(int) ] == False), True, False) 
+                        pointlist.remove_points(deletemask_ceil)
+                        deletemask_floor = np.where((mask[ np.floor(pointlist.data['qx'] + qx[Rx, Ry]).astype(int),
+                            np.floor(pointlist.data['qy'] + qy[Rx,Ry]).astype(int) ] == False), True, False)
+                        pointlist.remove_points(deletemask_floor)
+                if coords is None:
+                    for i in range(pointlist.length):
+                        deletemask_ceil = np.where((mask[ np.ceil(pointlist.data['qx']).astype(int),
+                            np.ceil(pointlist.data['qy']).astype(int) ] == False), True, False) 
+                        pointlist.remove_points(deletemask_ceil)
+                        deletemask_floor = np.where((mask[ np.floor(pointlist.data['qx']).astype(int),
+                            np.floor(pointlist.data['qy']).astype(int) ] == False), True, False)
+                        pointlist.remove_points(deletemask_floor)
     return pointlistarray
 
 
